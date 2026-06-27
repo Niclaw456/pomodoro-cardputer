@@ -4,29 +4,36 @@
   Hardware: ESP32-S3 (Stamp-S3A), 1.14" 240x135 ST7789V2 LCD,
             56-key TCA8418 keyboard, ES8311/NS4150B speaker.
 
-  NOTE: This Cardputer keyboard has no dedicated arrow keys. Arrows are
-  the Fn layer over the punctuation row: Fn+;=Up  Fn+,=Left
-  Fn+.=Down  Fn+/=Right. That's what "arrow keys" means below.
+  NOTE: This Cardputer keyboard has no dedicated ESC key. ESC is
+  Fn + ` (the top-left backtick key). That's the only place Fn is
+  used anywhere in this app now.
 
   --- Timer screen ---
-    [SPACE]      Start / Pause the current session
-    [R]          Reset current session back to full time
-    [S]          Skip to the next session (focus <-> break)
-    [P]          Open Settings
-    [`]          Mute / unmute sound
+    [SPACE]   Start / Pause the current session
+    [R]       Reset current session back to full time
+    [S]       Skip to the next session (focus <-> break)
+    [M]       Mute / unmute sound
+    [ESC]     Open Settings   (Fn + `)
 
-  --- Settings screen ---
-    [Fn]+[;]/[.] Move selection Up / Down between rows
-    [Fn]+[,]/[/] Move digit cursor Left / Right (duration rows),
-                 or adjust value Left/Right (volume & cycle-count rows)
-    [Fn]+[;]/[.] also increments/decrements the selected digit on
-                 duration rows (Up = +1, Down = -1)
-    [ENTER]      Confirm / exit Settings (saves to flash)
-    [`]          Cancel — exit Settings without saving changes
+  --- Settings screen: row list ---
+    [;] / [.] Move selection Up / Down between rows
+    [ENTER]   Edit the selected row
+    [ESC]     Save everything to flash and return to the Timer screen
+              (Fn + `)
+
+  --- Settings screen: editing a row (after ENTER) ---
+    Duration rows (Focus / Short break / Long break):
+      [,] / [/]  Move the digit cursor Left / Right
+      [;] / [.]  Increment / decrement the selected digit
+    Cycles / Volume rows:
+      [,] / [/]  Decrease / increase the value directly
+    [ENTER]   Done with this row — back to the row list (stays in Settings)
+    [ESC]     Save everything to flash and return to the Timer screen
+              (Fn + `) — works even while still editing a row
 
   Settings (focus/break/long-break minutes, sessions-before-long-break,
-  volume) persist across power-off using the ESP32's NVS flash via the
-  Preferences library.
+  volume, mute) persist across power-off using the ESP32's NVS flash via
+  the Preferences library.
 
   Build/flash with PlatformIO (VS Code):
     pio run -t upload
@@ -88,6 +95,13 @@ enum class AppScreen : uint8_t {
   Settings
 };
 
+// Two levels inside the Settings screen: browsing the row list, or
+// drilled into editing one specific row's value.
+enum class SettingsMode : uint8_t {
+  List,
+  Editing
+};
+
 // Each row in the Settings screen. Duration rows are edited digit-by-digit;
 // Cycles and Volume are edited as a single value with Left/Right.
 enum class SettingRow : uint8_t {
@@ -119,6 +133,7 @@ static bool     soundEnabled   = true;
 // ---------------------------------------------------------------------------
 
 static AppScreen currentScreen = AppScreen::Timer;
+static SettingsMode settingsMode = SettingsMode::List;
 static SettingRow selectedRow  = SettingRow::FocusDuration;
 
 // Digit cursor for the duration rows: 0 = tens-of-minutes digit,
@@ -128,9 +143,8 @@ static SettingRow selectedRow  = SettingRow::FocusDuration;
 static uint8_t  digitCursor = 0;
 static constexpr uint8_t DURATION_DIGIT_COUNT = 2;
 
-// Working copy of the config that Settings edits live-on; only written
-// back to `cfg` (and flash) when the user confirms with ENTER. This is
-// what lets `` ` `` cancel out of Settings without side effects.
+// Working copy of the config that Settings edits live on; only written
+// back to `cfg` (and flash) when the user presses ESC to exit Settings.
 static PomodoroConfig draftCfg;
 
 // ---------------------------------------------------------------------------
@@ -176,9 +190,8 @@ static void loadSettings();
 static void saveSettings();
 static void enterSettings();
 static void confirmSettings();
-static void cancelSettings();
-static void handleTimerInput(bool fnHeld, const Keyboard_Class::KeysState &st);
-static void handleSettingsInput(bool fnHeld, const Keyboard_Class::KeysState &st);
+static void handleTimerInput(const Keyboard_Class::KeysState &st);
+static void handleSettingsInput(const Keyboard_Class::KeysState &st);
 static uint16_t* durationFieldForRow(SettingRow row); // points into draftCfg
 static void adjustSelectedDigit(int delta);
 static void applyVolumeToSpeaker();
@@ -241,12 +254,31 @@ void loop() {
   if (M5Cardputer.Keyboard.isChange()) {
     if (M5Cardputer.Keyboard.isPressed()) {
       Keyboard_Class::KeysState st = M5Cardputer.Keyboard.keysState();
-      bool fnHeld = st.fn;
 
-      if (currentScreen == AppScreen::Timer) {
-        handleTimerInput(fnHeld, st);
-      } else {
-        handleSettingsInput(fnHeld, st);
+      // ESC = Fn + ` on this keyboard (there's no standalone ESC key).
+      // It means two different things depending on context, but it's
+      // detected the same way everywhere, so handle it once here.
+      bool escPressed = false;
+      if (st.fn) {
+        for (char c : st.word) {
+          if (c == '`') { escPressed = true; break; }
+        }
+      }
+
+      if (escPressed) {
+        if (currentScreen == AppScreen::Timer) {
+          enterSettings();
+        } else {
+          confirmSettings(); // save everything & return to Timer
+        }
+      } else if (!st.fn) {
+        // Every other control on both screens is a plain (non-Fn) key,
+        // so once ESC is ruled out we can ignore Fn-held events entirely.
+        if (currentScreen == AppScreen::Timer) {
+          handleTimerInput(st);
+        } else {
+          handleSettingsInput(st);
+        }
       }
     }
   }
@@ -293,9 +325,7 @@ static void advancePhase() {
 // Input handling — Timer screen
 // ---------------------------------------------------------------------------
 
-static void handleTimerInput(bool fnHeld, const Keyboard_Class::KeysState &st) {
-  if (fnHeld) return; // no Fn-layer actions needed on the Timer screen anymore
-
+static void handleTimerInput(const Keyboard_Class::KeysState &st) {
   for (char c : st.word) {
     if (c == ' ') {
       // Start / pause / resume
@@ -316,9 +346,7 @@ static void handleTimerInput(bool fnHeld, const Keyboard_Class::KeysState &st) {
     } else if (c == 's' || c == 'S') {
       // Skip to next phase
       advancePhase();
-    } else if (c == 'p' || c == 'P') {
-      enterSettings();
-    } else if (c == '`') {
+    } else if (c == 'm' || c == 'M') {
       soundEnabled = !soundEnabled;
       prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
       prefs.putBool(NVS_KEY_SOUNDON, soundEnabled);
@@ -332,32 +360,28 @@ static void handleTimerInput(bool fnHeld, const Keyboard_Class::KeysState &st) {
 // ---------------------------------------------------------------------------
 
 static void enterSettings() {
-  draftCfg = cfg;       // edit a copy so cancel is a true no-op
+  draftCfg = cfg;       // edit a copy; written back to cfg+flash on ESC
   selectedRow = SettingRow::FocusDuration;
+  settingsMode = SettingsMode::List;
   digitCursor = 0;
   currentScreen = AppScreen::Settings;
   playNavTone();
 }
 
+// Called by ESC from anywhere inside the Settings screen (row list or
+// mid-edit). Saves the draft to cfg + flash and returns to the Timer.
 static void confirmSettings() {
   cfg = draftCfg;
   applyVolumeToSpeaker();
   saveSettings();
-  // Any duration the user changed should take effect immediately if the
-  // affected phase is currently idle (not mid-countdown); cheapest correct
-  // way to guarantee that is to just re-derive the current phase's total
-  // when we're idle, same as the old Fn+,/. behavior did.
+  // If we're idle, re-derive the current phase's total in case its
+  // duration just changed, so the new length is reflected immediately.
   if (runState == RunState::Idle) {
     startPhase(currentPhase, false);
   }
   currentScreen = AppScreen::Timer;
+  settingsMode = SettingsMode::List;
   playStartTone();
-}
-
-static void cancelSettings() {
-  // draftCfg is simply discarded; cfg was never touched.
-  currentScreen = AppScreen::Timer;
-  playPauseTone();
 }
 
 // Returns a pointer to the minutes field in draftCfg that the given row
@@ -385,106 +409,91 @@ static void adjustSelectedDigit(int delta) {
   *field = (uint16_t)newVal;
 }
 
-static void handleSettingsInput(bool fnHeld, const Keyboard_Class::KeysState &st) {
-  // Fn must be held for navigation/editing — that's how arrows work on
-  // this keyboard (Fn+;,./  = Up/Left/Down/Right).
-  if (fnHeld) {
-    // Arrow input is "pick one direction", not text entry — only act on
-    // the first arrow character seen this frame. This also sidesteps any
-    // staleness issue from selectedRow changing mid-loop if the hardware
-    // ever reports more than one key in st.word for a single event.
+static void handleSettingsInput(const Keyboard_Class::KeysState &st) {
+  if (settingsMode == SettingsMode::List) {
+    // ---- Row list: ; and . move selection, ENTER drills in ----
     for (char c : st.word) {
-      bool isDurationRow = (durationFieldForRow(selectedRow) != nullptr);
-      bool handled = true;
-
-      switch (c) {
-        case ';': // Up
-          if (isDurationRow) {
-            adjustSelectedDigit(+1);
-          } else {
-            uint8_t idx = (uint8_t)selectedRow;
-            idx = (idx == 0) ? (uint8_t)SettingRow::Count - 1 : idx - 1;
-            selectedRow = (SettingRow)idx;
-            digitCursor = 0;
-            playNavTone();
-          }
-          break;
-
-        case '.': // Down
-          if (isDurationRow) {
-            adjustSelectedDigit(-1);
-          } else {
-            uint8_t idx = (uint8_t)selectedRow;
-            idx = (idx + 1) % (uint8_t)SettingRow::Count;
-            selectedRow = (SettingRow)idx;
-            digitCursor = 0;
-            playNavTone();
-          }
-          break;
-
-        case ',': // Left
-          if (isDurationRow) {
-            if (digitCursor == 0) {
-              uint8_t idx = (uint8_t)selectedRow;
-              idx = (idx == 0) ? (uint8_t)SettingRow::Count - 1 : idx - 1;
-              selectedRow = (SettingRow)idx;
-              digitCursor = 0;
-            } else {
-              digitCursor--;
-            }
-          } else if (selectedRow == SettingRow::Cycles) {
-            if (draftCfg.sessionsUntilLong > MIN_CYCLES) draftCfg.sessionsUntilLong--;
-            playNavTone();
-          } else if (selectedRow == SettingRow::Volume) {
-            int v = (int)draftCfg.volume - VOLUME_STEP;
-            draftCfg.volume = (v < MIN_VOLUME) ? MIN_VOLUME : (uint8_t)v;
-            M5Cardputer.Speaker.setVolume(draftCfg.volume);
-            M5Cardputer.Speaker.tone(1000, 120); // preview the new level
-          }
-          break;
-
-        case '/': // Right
-          if (isDurationRow) {
-            if (digitCursor >= DURATION_DIGIT_COUNT - 1) {
-              uint8_t idx = (uint8_t)selectedRow;
-              idx = (idx + 1) % (uint8_t)SettingRow::Count;
-              selectedRow = (SettingRow)idx;
-              digitCursor = 0;
-            } else {
-              digitCursor++;
-            }
-          } else if (selectedRow == SettingRow::Cycles) {
-            if (draftCfg.sessionsUntilLong < MAX_CYCLES) draftCfg.sessionsUntilLong++;
-            playNavTone();
-          } else if (selectedRow == SettingRow::Volume) {
-            int v = (int)draftCfg.volume + VOLUME_STEP;
-            draftCfg.volume = (v > MAX_VOLUME) ? MAX_VOLUME : (uint8_t)v;
-            M5Cardputer.Speaker.setVolume(draftCfg.volume);
-            M5Cardputer.Speaker.tone(1000, 120); // preview the new level
-          }
-          break;
-
-        default:
-          handled = false;
-          break;
+      if (c == ';') {
+        uint8_t idx = (uint8_t)selectedRow;
+        idx = (idx == 0) ? (uint8_t)SettingRow::Count - 1 : idx - 1;
+        selectedRow = (SettingRow)idx;
+        playNavTone();
+        break;
+      } else if (c == '.') {
+        uint8_t idx = (uint8_t)selectedRow;
+        idx = (idx + 1) % (uint8_t)SettingRow::Count;
+        selectedRow = (SettingRow)idx;
+        playNavTone();
+        break;
       }
-
-      if (handled) break; // one arrow action per keyboard event
     }
-    return; // Fn layer handled; ignore any plain-key fallthrough this frame
-  }
-
-  // Non-Fn keys on the Settings screen
-  if (st.enter) {
-    confirmSettings();
+    if (st.enter) {
+      settingsMode = SettingsMode::Editing;
+      digitCursor = 0;
+      playNavTone();
+    }
+    // ESC is handled centrally in loop() and works from here too.
     return;
   }
+
+  // ---- Editing a specific row ----
+  bool isDurationRow = (durationFieldForRow(selectedRow) != nullptr);
+
   for (char c : st.word) {
-    if (c == '`') {
-      cancelSettings();
-      return;
+    bool handled = true;
+    switch (c) {
+      case ';': // increment selected digit (duration rows only)
+        if (isDurationRow) adjustSelectedDigit(+1);
+        else handled = false;
+        break;
+
+      case '.': // decrement selected digit (duration rows only)
+        if (isDurationRow) adjustSelectedDigit(-1);
+        else handled = false;
+        break;
+
+      case ',': // move digit cursor left / decrease value
+        if (isDurationRow) {
+          if (digitCursor > 0) digitCursor--;
+        } else if (selectedRow == SettingRow::Cycles) {
+          if (draftCfg.sessionsUntilLong > MIN_CYCLES) draftCfg.sessionsUntilLong--;
+          playNavTone();
+        } else if (selectedRow == SettingRow::Volume) {
+          int v = (int)draftCfg.volume - VOLUME_STEP;
+          draftCfg.volume = (v < MIN_VOLUME) ? MIN_VOLUME : (uint8_t)v;
+          M5Cardputer.Speaker.setVolume(draftCfg.volume);
+          M5Cardputer.Speaker.tone(1000, 120); // preview the new level
+        }
+        break;
+
+      case '/': // move digit cursor right / increase value
+        if (isDurationRow) {
+          if (digitCursor < DURATION_DIGIT_COUNT - 1) digitCursor++;
+        } else if (selectedRow == SettingRow::Cycles) {
+          if (draftCfg.sessionsUntilLong < MAX_CYCLES) draftCfg.sessionsUntilLong++;
+          playNavTone();
+        } else if (selectedRow == SettingRow::Volume) {
+          int v = (int)draftCfg.volume + VOLUME_STEP;
+          draftCfg.volume = (v > MAX_VOLUME) ? MAX_VOLUME : (uint8_t)v;
+          M5Cardputer.Speaker.setVolume(draftCfg.volume);
+          M5Cardputer.Speaker.tone(1000, 120); // preview the new level
+        }
+        break;
+
+      default:
+        handled = false;
+        break;
     }
+    if (handled) break; // one action per keyboard event
   }
+
+  if (st.enter) {
+    // Done editing this row — back to the list, still inside Settings.
+    settingsMode = SettingsMode::List;
+    playNavTone();
+  }
+  // ESC is handled centrally in loop() and saves+exits from here too,
+  // even mid-edit.
 }
 
 // ---------------------------------------------------------------------------
@@ -676,13 +685,13 @@ static void renderTimerScreen() {
   canvas.setTextColor(COL_DIM, COL_BG);
   const char* help;
   if (runState == RunState::Idle) {
-    help = "SPACE start  P settings  S skip";
+    help = "SPACE start  ESC settings  S skip";
   } else if (runState == RunState::Running) {
-    help = "SPACE pause  R reset  S skip";
+    help = "SPACE pause  R reset  S skip  M mute";
   } else if (runState == RunState::Paused) {
-    help = "SPACE resume  R reset  S skip  P settings";
+    help = "SPACE resume  R reset  ESC settings";
   } else {
-    help = "SPACE continue  P settings  ` mute";
+    help = "SPACE continue  ESC settings  M mute";
   }
   canvas.drawString(help, 4, SCREEN_H - 14);
 }
@@ -707,60 +716,68 @@ static constexpr int SETTINGS_TOP_Y   = 12;
 static constexpr int SETTINGS_LABEL_X = 8;
 static constexpr int SETTINGS_VALUE_X = 178;
 
-// Draws a "MM" value where the digit under digitCursor is boxed, so the
-// user can see exactly which digit Up/Down/Left/Right will affect.
-static void drawEditableMinutes(uint16_t minutes, int x, int y, bool selected) {
+// Draws a "MM" value. When `editing` is true, the digit under digitCursor
+// is boxed so the user can see exactly which digit ;/. will affect.
+// When not editing, the row is just shown highlighted (if selected) with
+// no digit box, since you haven't drilled into it yet.
+static void drawEditableMinutes(uint16_t minutes, int x, int y, bool selected, bool editing) {
   char buf[3];
   snprintf(buf, sizeof(buf), "%02u", minutes);
 
-  // Each digit glyph is ~6px wide at textSize(1) with the default font;
-  // we bump to size(1) deliberately and measure via textWidth so this
-  // still lines up if the default font metrics differ slightly.
   canvas.setTextSize(1);
   int charW = canvas.textWidth("0");
 
   for (int i = 0; i < 2; i++) {
     char digitStr[2] = { buf[i], '\0' };
     int dx = x + i * charW;
-    bool isCursorHere = selected && (digitCursor == (uint8_t)i);
+    bool isCursorHere = editing && selected && (digitCursor == (uint8_t)i);
 
     if (isCursorHere) {
       canvas.fillRect(dx - 1, y - 2, charW + 1, 14, COL_FOCUS);
       canvas.setTextColor(COL_BG, COL_FOCUS);
     } else {
-      canvas.setTextColor(COL_TEXT, COL_BG);
+      canvas.setTextColor(selected ? COL_FOCUS : COL_TEXT, COL_BG);
     }
     canvas.drawString(digitStr, dx, y);
   }
-  canvas.setTextColor(COL_TEXT, COL_BG);
+  canvas.setTextColor(selected ? COL_FOCUS : COL_TEXT, COL_BG);
   canvas.drawString("m", x + 2 * charW + 2, y);
 }
 
 static void renderSettingsScreen() {
+  bool editing = (settingsMode == SettingsMode::Editing);
+
   canvas.setTextDatum(top_left);
   canvas.setTextSize(1);
   canvas.setTextColor(COL_TEXT, COL_BG);
   canvas.drawString("SETTINGS", SETTINGS_LABEL_X, 2);
+  if (editing) {
+    canvas.setTextColor(COL_FOCUS, COL_BG);
+    canvas.drawString("EDITING", SCREEN_W - 56, 2);
+  }
 
   for (uint8_t i = 0; i < (uint8_t)SettingRow::Count; i++) {
     SettingRow row = (SettingRow)i;
     bool selected = (row == selectedRow);
+    bool rowEditing = editing && selected;
     int rowY = SETTINGS_TOP_Y + i * SETTINGS_ROW_H + 14;
 
     canvas.setTextColor(selected ? COL_FOCUS : COL_DIM, COL_BG);
-    canvas.drawString(selected ? ">" : " ", SETTINGS_LABEL_X, rowY);
+    canvas.drawString(selected ? (rowEditing ? "*" : ">") : " ", SETTINGS_LABEL_X, rowY);
     canvas.drawString(nameForRow(row), SETTINGS_LABEL_X + 10, rowY);
 
     canvas.setTextColor(COL_TEXT, COL_BG);
     uint16_t* durField = durationFieldForRow(row);
     if (durField) {
-      drawEditableMinutes(*durField, SETTINGS_VALUE_X, rowY, selected);
+      drawEditableMinutes(*durField, SETTINGS_VALUE_X, rowY, selected, rowEditing);
     } else if (row == SettingRow::Cycles) {
       char buf[4];
       snprintf(buf, sizeof(buf), "%u", draftCfg.sessionsUntilLong);
-      if (selected) {
+      if (rowEditing) {
         canvas.fillRect(SETTINGS_VALUE_X - 1, rowY - 2, 16, 14, COL_FOCUS);
         canvas.setTextColor(COL_BG, COL_FOCUS);
+      } else {
+        canvas.setTextColor(selected ? COL_FOCUS : COL_TEXT, COL_BG);
       }
       canvas.drawString(buf, SETTINGS_VALUE_X, rowY);
     } else if (row == SettingRow::Volume) {
@@ -772,12 +789,19 @@ static void renderSettingsScreen() {
       int fillW = (int)((float)draftCfg.volume / (float)MAX_VOLUME * (barW - 2));
       if (fillW > 0) {
         canvas.fillRect(barX + 1, barY + 1, fillW, barH - 2,
-                         selected ? COL_FOCUS : COL_TEXT);
+                         rowEditing ? COL_FOCUS : (selected ? COL_FOCUS : COL_TEXT));
       }
     }
   }
 
   canvas.setTextColor(COL_DIM, COL_BG);
-  canvas.drawString("Fn+arrow move/edit ENTER save ` cancel",
-                     SETTINGS_LABEL_X, SCREEN_H - 14);
+  const char* help;
+  if (editing) {
+    bool isDurationRow = (durationFieldForRow(selectedRow) != nullptr);
+    help = isDurationRow ? ",/ digit ;. change ENTER done"
+                          : ",/ change  ENTER done  ESC save";
+  } else {
+    help = "; . select  ENTER edit  ESC save";
+  }
+  canvas.drawString(help, SETTINGS_LABEL_X, SCREEN_H - 14);
 }
