@@ -27,13 +27,15 @@
       [;] / [.]  Increment / decrement the selected digit
     Cycles / Volume rows:
       [,] / [/]  Decrease / increase the value directly
+    Auto Start row:
+      [,] / [/]  Toggle ON / OFF
     [ENTER]   Done with this row — back to the row list (stays in Settings)
     [ESC]     Save everything to flash and return to the Timer screen
               (Fn + `) — works even while still editing a row
 
   Settings (focus/break/long-break minutes, sessions-before-long-break,
-  volume, mute) persist across power-off using the ESP32's NVS flash via
-  the Preferences library.
+  volume, auto-start, mute) persist across power-off using the ESP32's NVS 
+  flash via the Preferences library.
 
   Build/flash with PlatformIO (VS Code):
     pio run -t upload
@@ -53,6 +55,7 @@ struct PomodoroConfig {
   uint16_t longBreakMinutes  = 15;
   uint8_t  sessionsUntilLong = 4;   // focus sessions completed before a long break
   uint8_t  volume            = 150; // 0-255, passed straight to M5.Speaker.setVolume
+  bool     autoStart         = false; // whether to automatically advance phases
 };
 
 // Bounds for everything editable in the Settings screen.
@@ -67,13 +70,14 @@ static constexpr uint8_t  VOLUME_STEP      = 17; // ~15 steps end-to-end
 static PomodoroConfig cfg;
 
 // NVS namespace/key names (<=15 chars per the Preferences library limit)
-static constexpr char NVS_NAMESPACE[] = "pomodoro";
+static constexpr char NVS_NAMESPACE[]   = "pomodoro";
 static constexpr char NVS_KEY_FOCUS[]   = "focusMin";
 static constexpr char NVS_KEY_SHORT[]   = "shortMin";
 static constexpr char NVS_KEY_LONG[]    = "longMin";
 static constexpr char NVS_KEY_CYCLES[]  = "cycles";
 static constexpr char NVS_KEY_VOLUME[]  = "volume";
 static constexpr char NVS_KEY_SOUNDON[] = "soundOn";
+static constexpr char NVS_KEY_AUTO[]    = "autoStart";
 
 static Preferences prefs;
 
@@ -103,13 +107,14 @@ enum class SettingsMode : uint8_t {
 };
 
 // Each row in the Settings screen. Duration rows are edited digit-by-digit;
-// Cycles and Volume are edited as a single value with Left/Right.
+// Cycles, Volume, and Auto Start are edited as a single value with Left/Right.
 enum class SettingRow : uint8_t {
   FocusDuration,
   ShortBreakDuration,
   LongBreakDuration,
   Cycles,
   Volume,
+  AutoStart,
   Count // sentinel, must stay last
 };
 
@@ -174,7 +179,7 @@ static M5Canvas canvas(&M5Cardputer.Display);
 // ---------------------------------------------------------------------------
 
 static void startPhase(Phase p, bool autoStart);
-static void advancePhase();
+static void advancePhase(bool autoStart = false);
 static void renderFrame();
 static void renderTimerScreen();
 static void renderSettingsScreen();
@@ -237,14 +242,20 @@ void loop() {
   if (currentScreen == AppScreen::Timer && runState == RunState::Running) {
     if (dt >= phaseRemainMs) {
       phaseRemainMs = 0;
-      runState = RunState::Finished;
       playPhaseCompleteTone();
+      
+      // Auto-start logic
+      if (cfg.autoStart) {
+        advancePhase(true); // Switches phase & starts it immediately
+      } else {
+        runState = RunState::Finished;
+      }
     } else {
       uint32_t prevSec = (phaseRemainMs + 999) / 1000;
       phaseRemainMs -= dt;
       uint32_t nowSec = (phaseRemainMs + 999) / 1000;
-      // tick sound on the last 3 seconds of the phase
-      if (nowSec != prevSec && nowSec <= 3 && nowSec > 0) {
+      // tick sound on the last 10 seconds of the phase
+      if (nowSec != prevSec && nowSec <= 10 && nowSec > 0) {
         playTickTone();
       }
     }
@@ -307,17 +318,17 @@ static void startPhase(Phase p, bool autoStart) {
   runState = autoStart ? RunState::Running : RunState::Idle;
 }
 
-static void advancePhase() {
+static void advancePhase(bool autoStart) {
   if (currentPhase == Phase::Focus) {
     completedFocusSessions++;
     if (completedFocusSessions % cfg.sessionsUntilLong == 0) {
-      startPhase(Phase::LongBreak, false);
+      startPhase(Phase::LongBreak, autoStart);
     } else {
-      startPhase(Phase::ShortBreak, false);
+      startPhase(Phase::ShortBreak, autoStart);
     }
   } else {
     // any break -> back to focus
-    startPhase(Phase::Focus, false);
+    startPhase(Phase::Focus, autoStart);
   }
 }
 
@@ -336,8 +347,7 @@ static void handleTimerInput(const Keyboard_Class::KeysState &st) {
         runState = RunState::Paused;
         playPauseTone();
       } else if (runState == RunState::Finished) {
-        advancePhase();
-        runState = RunState::Running;
+        advancePhase(true); // if it ended and didn't auto start, start now
         playStartTone();
       }
     } else if (c == 'r' || c == 'R') {
@@ -345,7 +355,7 @@ static void handleTimerInput(const Keyboard_Class::KeysState &st) {
       startPhase(currentPhase, false);
     } else if (c == 's' || c == 'S') {
       // Skip to next phase
-      advancePhase();
+      advancePhase(false);
     } else if (c == 'm' || c == 'M') {
       soundEnabled = !soundEnabled;
       prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
@@ -463,6 +473,9 @@ static void handleSettingsInput(const Keyboard_Class::KeysState &st) {
           draftCfg.volume = (v < MIN_VOLUME) ? MIN_VOLUME : (uint8_t)v;
           M5Cardputer.Speaker.setVolume(draftCfg.volume);
           M5Cardputer.Speaker.tone(1000, 120); // preview the new level
+        } else if (selectedRow == SettingRow::AutoStart) {
+          draftCfg.autoStart = !draftCfg.autoStart;
+          playNavTone();
         }
         break;
 
@@ -477,6 +490,9 @@ static void handleSettingsInput(const Keyboard_Class::KeysState &st) {
           draftCfg.volume = (v > MAX_VOLUME) ? MAX_VOLUME : (uint8_t)v;
           M5Cardputer.Speaker.setVolume(draftCfg.volume);
           M5Cardputer.Speaker.tone(1000, 120); // preview the new level
+        } else if (selectedRow == SettingRow::AutoStart) {
+          draftCfg.autoStart = !draftCfg.autoStart;
+          playNavTone();
         }
         break;
 
@@ -507,6 +523,7 @@ static void loadSettings() {
   cfg.longBreakMinutes  = (uint16_t)prefs.getUInt(NVS_KEY_LONG,    cfg.longBreakMinutes);
   cfg.sessionsUntilLong = (uint8_t)prefs.getUInt(NVS_KEY_CYCLES,  cfg.sessionsUntilLong);
   cfg.volume             = (uint8_t)prefs.getUInt(NVS_KEY_VOLUME,  cfg.volume);
+  cfg.autoStart          = prefs.getBool(NVS_KEY_AUTO,             cfg.autoStart);
   soundEnabled           = prefs.getBool(NVS_KEY_SOUNDON, soundEnabled);
   prefs.end();
 
@@ -525,6 +542,7 @@ static void saveSettings() {
   prefs.putUInt(NVS_KEY_LONG,   cfg.longBreakMinutes);
   prefs.putUInt(NVS_KEY_CYCLES, cfg.sessionsUntilLong);
   prefs.putUInt(NVS_KEY_VOLUME, cfg.volume);
+  prefs.putBool(NVS_KEY_AUTO,   cfg.autoStart);
   prefs.putBool(NVS_KEY_SOUNDON, soundEnabled);
   prefs.end();
 }
@@ -707,12 +725,14 @@ static const char* nameForRow(SettingRow row) {
     case SettingRow::LongBreakDuration:  return "Long break";
     case SettingRow::Cycles:             return "Cycles/long break";
     case SettingRow::Volume:             return "Volume";
+    case SettingRow::AutoStart:          return "Auto Start";
     default: return "";
   }
 }
 
-static constexpr int SETTINGS_ROW_H   = 20;
-static constexpr int SETTINGS_TOP_Y   = 12;
+// Spacing adjusted slightly so all 6 rows fit above the help bar
+static constexpr int SETTINGS_ROW_H   = 16;
+static constexpr int SETTINGS_TOP_Y   = 6;
 static constexpr int SETTINGS_LABEL_X = 8;
 static constexpr int SETTINGS_VALUE_X = 178;
 
@@ -791,6 +811,14 @@ static void renderSettingsScreen() {
         canvas.fillRect(barX + 1, barY + 1, fillW, barH - 2,
                          rowEditing ? COL_FOCUS : (selected ? COL_FOCUS : COL_TEXT));
       }
+    } else if (row == SettingRow::AutoStart) {
+      if (rowEditing) {
+        canvas.fillRect(SETTINGS_VALUE_X - 1, rowY - 2, 28, 14, COL_FOCUS);
+        canvas.setTextColor(COL_BG, COL_FOCUS);
+      } else {
+        canvas.setTextColor(selected ? COL_FOCUS : COL_TEXT, COL_BG);
+      }
+      canvas.drawString(draftCfg.autoStart ? "ON" : "OFF", SETTINGS_VALUE_X, rowY);
     }
   }
 
