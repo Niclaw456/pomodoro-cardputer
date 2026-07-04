@@ -1,161 +1,158 @@
-# Pomodoro Timer — M5Stack Cardputer ADV
+🍅 Pomodoro Timer for M5Stack Cardputer ADV
 
-A simple Pomodoro (focus/break) timer for the M5Stack Cardputer ADV,
-built with PlatformIO + Arduino framework + M5Unified/M5Cardputer.
+A fully-featured, portable Pomodoro timer built specifically for the M5Stack
+Cardputer ADV (ESP32-S3). This app helps you manage your productivity using the
+Pomodoro Technique, featuring customizable intervals, sound alerts, visual
+progress rings, and settings that persist across reboots.
 
-## Features
+✨ Features
 
-- 25/5/15-minute focus / short-break / long-break cycle (classic Pomodoro)
-  by default, fully customizable in a built-in **Settings** screen
-- Circular countdown ring + big digital readout
-- Session dots showing progress toward the long break
-- Start / pause / resume / reset / skip controls from the keyboard
-- **Settings screen** (press `ESC` from the Timer screen) to adjust:
-  - Focus / short-break / long-break duration, edited digit-by-digit
-  - How many focus sessions happen before a long break (1–8)
-  - Speaker volume, with an audible preview tone as you adjust it
-- **Settings persist across power-off** — saved to the ESP32's internal
-  flash (NVS) via the `Preferences` library, so your durations, cycle
-  count, and volume are still there next time you turn the Cardputer on
-- Tone feedback on start/pause/finish, plus a 3-2-1 tick near the end of
-  each phase
-- Mute toggle (also persisted)
+  - Customizable Timers: Set your own durations for Focus, Short Breaks, and
+    Long Breaks (1 to 99 minutes).
+  - Cycle Tracking: Automatically tracks your focus sessions and triggers a Long
+    Break after a set number of cycles.
+  - Auto-Start Mode: Optionally transition seamlessly between Focus and Break
+    phases without needing to press start.
+  - Countdown Alerts: Emits a ticking sound during the final 10 seconds of any
+    phase to warn you it's ending.
+  - Persistent Settings: Your durations, volume, and preferences are saved to
+    the ESP32's NVS flash memory—no need to configure them every time you turn
+    it on.
+  - Visual UI: Smooth circular progress ring and intuitive menus.
 
-## Hardware
+🛠️ Hardware Requirements
 
-- M5Stack **Cardputer ADV** (ESP32-S3 / Stamp-S3A, 1.14" 240×135 ST7789V2
-  display, 56-key keyboard)
+  - M5Stack Cardputer (Stamp-S3A, 1.14" ST7789V2 LCD, 56-key TCA8418 keyboard,
+    Speaker).
 
-> **Note on this keyboard's ESC key:** the Cardputer has no dedicated ESC
-> key. ESC is `Fn` + `` ` `` (the top-left backtick key). That's the only
-> place `Fn` is used anywhere in this app — every other control below is
-> a plain key press.
+🚀 Installation & Flashing
 
-## Setup (VS Code + PlatformIO)
+This project is configured for PlatformIO (VS Code).
 
-1. Install the [PlatformIO IDE extension](https://platformio.org/install/ide?install=vscode)
-   in VS Code if you haven't already.
-2. Unzip this project and open the folder in VS Code
-   (`File > Open Folder...`).
-3. PlatformIO will detect `platformio.ini` automatically and offer to
-   install the project's dependencies (M5Unified, M5GFX, M5Cardputer) —
-   accept, or run it manually from the PlatformIO sidebar.
-4. Plug in the Cardputer ADV over USB-C.
-5. Build & upload:
-   - PlatformIO sidebar → **Upload**, or
-   - Terminal: `pio run -t upload`
-6. Open the serial monitor if you want logs: `pio device monitor`
+1.  Create a new PlatformIO project for your Cardputer.
+2.  Ensure you have the M5Cardputer library installed in your platformio.ini.
+3.  Paste the code into your main.cpp.
+4.  Build and upload using the PlatformIO interface or terminal:
+    pio run -t upload
 
-If `pio run -t upload` can't find the device, set the side power switch
-to **OFF**, hold the **G0** button, plug in USB, then release G0 — this
-forces the board into download mode.
+🎮 Controls & Usage
 
-## Controls
+⚠️ IMPORTANT NOTE ON THE ESC KEY: The Cardputer keyboard does not have a
+dedicated ESC key. To trigger ESC, press Fn + ` (the top-left key on the
+keyboard).
 
-### Timer screen
+⏱️ Timer Screen (Main)
 
-| Key            | Action                                      |
-|----------------|----------------------------------------------|
-| `SPACE`        | Start / pause / resume the current session   |
-| `R`            | Reset the current session to its full length |
-| `S`            | Skip to the next session                     |
-| `M`            | Mute / unmute sound                          |
-| `ESC` (`Fn`+`` ` ``) | Open Settings                          |
+| Key                  | Action                                        |
+| :------------------- | :-------------------------------------------- |
+| **`[SPACE]`**        | Start / Pause / Resume the timer              |
+| **`[R]`**            | Reset the current timer back to full duration |
+| **`[S]`**            | Skip to the next phase (Focus ↔ Break)        |
+| **`[M]`**            | Mute / Unmute the speaker temporarily         |
+| **`[Fn]` + `` ` ``** | Open the **Settings Menu**                    |
 
-### Settings screen — row list
+⚙️ Settings Screen (List Navigation)
 
-Opening Settings pauses the countdown — your remaining time is exactly
-where you left it when you come back. You land here first; pick a row,
-then press `ENTER` to actually edit it.
+| Key                  | Action                                     |
+| :------------------- | :----------------------------------------- |
+| **`[;]` / `[.]`**    | Move selection cursor Up / Down            |
+| **`[ENTER]`**        | Edit the currently selected row            |
+| **`[Fn]` + `` ` ``** | **Save and Exit** back to the Timer screen |
 
-| Key      | Action                                                  |
-|----------|------------------------------------------------------------|
-| `;`      | Move the selection up                                      |
-| `.`      | Move the selection down                                     |
-| `ENTER`  | Drill into the selected row to edit it                      |
-| `ESC` (`Fn`+`` ` ``) | Save everything to flash and return to the Timer screen, from anywhere |
+✏️ Settings Screen (Editing a Row)
 
-### Settings screen — editing a row (after `ENTER`)
+Once you press [ENTER] on a row, you enter Edit Mode:
 
-| Key      | Duration rows (Focus / Short break / Long break) | Cycles / Volume rows |
-|----------|----------------------------------------------------|------------------------|
-| `,`      | Move the digit cursor left                          | Decrease the value     |
-| `/`      | Move the digit cursor right                         | Increase the value     |
-| `;`      | Increment the selected digit                        | —                       |
-| `.`      | Decrement the selected digit                        | —                       |
-| `ENTER`  | Done with this row — back to the row list (stays in Settings) | same |
-| `ESC` (`Fn`+`` ` ``) | Save everything and exit to the Timer screen — works even mid-edit | same |
+| Key                  | Action                                                                                                                               |
+| :------------------- | :----------------------------------------------------------------------------------------------------------------------------------- |
+| **`[,]` / `[/]`**    | **Durations:** Move digit cursor Left/Right.<br>**Other Settings:** Decrease/Increase value (Volume, Cycles) or Toggle (Auto-Start). |
+| **`[;]` / `[.]`**    | **Durations Only:** Increment/Decrement the selected digit (+1, -1, +10, -10).                                                       |
+| **`[ENTER]`**        | Confirm changes and return to the Row List.                                                                                          |
+| **`[Fn]` + `` ` ``** | Save everything immediately and exit to Timer.                                                                                       |
 
-Each duration row shows two boxed digits, `MM`. Use `,`/`/` to move
-between the tens-digit and the ones-digit, and `;`/`.` to bump whichever
-digit is currently boxed up or down.
+📋 Settings Menu Options
 
-## Notes on the `platformio.ini` board choice
+1.  Focus: Duration of your main work session (MM).
+2.  Short break: Duration of your standard break (MM).
+3.  Long break: Duration of your extended break (MM).
+4.  Cycles/long break: How many Focus sessions must be completed before you earn
+    a Long Break.
+5.  Volume: Adjust the speaker volume visually via a progress bar.
+6.  Auto Start: Toggle ON or OFF. When ON, the next timer automatically begins
+    when the current one ends.
 
-This project targets the Cardputer ADV using the generic
-`esp32-s3-devkitc-1` board definition plus the USB-CDC build flags that
-M5Stack's own docs use for the (closely related) original Cardputer.
-This compiles cleanly on any standard PlatformIO `espressif32` install.
+🧠 Code Architecture & Function Breakdown
 
-If your installed M5Stack board package already exposes a dedicated
-`m5stack-stamps3` board entry (the Cardputer ADV's core module), you can
-switch to it in `platformio.ini`:
+Below is an overview of the internal functions powering the app, useful if you
+want to modify or extend the code.
 
-```ini
-board = m5stack-stamps3
-```
+Core Lifecycle
 
-Either should work; the devkitc-1 + flags combo is just the safer
-default since it doesn't depend on having a specific extra board
-package installed.
+  - setup(): Initializes the M5Cardputer, configures the display
+    (rotation/brightness), loads saved settings from flash, prepares the canvas
+    sprite, and starts the first Focus phase.
+  - loop(): The main application loop. Handles time delta calculations to
+    decrease the timer, triggers the 10-second countdown tick, processes
+    keyboard inputs, and calls renderFrame().
 
-## Customizing
+Phase Management
 
-Most of what you'd want to tweak — focus/break/long-break length, how
-many focus sessions happen before a long break, and volume — is now
-editable right on the device via the **Settings** screen, and survives
-power-off.
+  - startPhase(Phase p, bool autoStart): Sets up the specified phase (Focus,
+    Short Break, or Long Break). Calculates total milliseconds based on user
+    configuration and determines if the timer should begin ticking immediately
+    (autoStart).
+  - advancePhase(bool autoStart): Determines the next logical phase. If a Focus
+    phase ends, it increments the completed cycle count and decides whether to
+    trigger a Short or Long Break. If a Break ends, it loops back to Focus.
 
-The defaults (used the very first time the app runs, before anything's
-been saved to flash) and the editable ranges live near the top of
-`src/main.cpp`:
+Input Handling
 
-```cpp
-struct PomodoroConfig {
-  uint16_t focusMinutes      = 25;
-  uint16_t shortBreakMinutes = 5;
-  uint16_t longBreakMinutes  = 15;
-  uint8_t  sessionsUntilLong = 4;   // focus sessions before a long break
-  uint8_t  volume            = 150; // 0-255
-};
+  - handleTimerInput(KeysState): Processes keystrokes while on the main Timer
+    screen (Space, R, S, M).
+  - handleSettingsInput(KeysState): Complex state machine handling input for the
+    Settings screen. It routes inputs differently depending on whether the user
+    is browsing the list (SettingsMode::List) or actively changing a value
+    (SettingsMode::Editing).
 
-static constexpr uint16_t MIN_DURATION_MIN = 1;
-static constexpr uint16_t MAX_DURATION_MIN = 99;
-static constexpr uint8_t  MIN_CYCLES       = 1;
-static constexpr uint8_t  MAX_CYCLES       = 8;
-static constexpr uint8_t  MIN_VOLUME       = 0;
-static constexpr uint8_t  MAX_VOLUME       = 255;
-static constexpr uint8_t  VOLUME_STEP      = 17; // how much ,/ moves volume per press
-```
+Settings & Persistence
 
-Colors, ring size/position, and screen layout constants (including the
-Settings screen's row positions) are also near the top of the file if
-you want to restyle it.
+  - enterSettings(): Pauses the timer state, creates a temporary draftCfg of the
+    user's settings, and switches the UI to the Settings screen.
+  - confirmSettings(): Triggered by pressing ESC. Copies the draftCfg into the
+    active cfg, writes changes to NVS flash, applies the new volume, and returns
+    to the Timer screen.
+  - adjustSelectedDigit(int delta): Helper function for the settings UI that
+    allows users to edit time durations digit-by-digit (tens place vs ones
+    place) while clamping values between 1 and 99.
+  - loadSettings() / saveSettings(): Interfaces with the ESP32's Preferences
+    library to read/write settings to the non-volatile storage (NVS) pomodoro
+    namespace.
 
-### Resetting saved settings back to defaults
+Sound (Audio Cues)
 
-Settings live in NVS flash under the namespace `"pomodoro"`, completely
-separate from the firmware itself — re-flashing won't clear them. If
-you ever want to wipe them and start over from the defaults above, the
-simplest way is to temporarily add this to the top of `setup()` and
-flash once:
+  - applyVolumeToSpeaker(): Pushes the configured volume to the hardware
+    speaker.
+  - playStartTone() / playPauseTone(): Brief functional boops to confirm
+    play/pause actions.
+  - playTickTone(): A short high-pitched click played every second during the
+    last 10 seconds of a phase.
+  - playNavTone(): UI feedback sound when moving through the settings menu.
+  - playPhaseCompleteTone(): A rewarding 3-note ascending chime played when a
+    timer hits zero.
 
-```cpp
-Preferences p;
-p.begin("pomodoro", false);
-p.clear();
-p.end();
-```
+UI & Rendering
 
-Then remove those three lines and re-flash again so it doesn't wipe
-your settings every boot.
+  - renderFrame(): The main drawing orchestrator. Clears the background, calls
+    either the timer or settings render function, and pushes the completed
+    sprite to the display to prevent flickering.
+  - renderTimerScreen(): Draws the circular progress UI, the centered countdown
+    text (MM:SS), the side info panel (phase name, state, cycle dots), and the
+    bottom keyboard shortcut helper.
+  - drawProgressRing(float fraction, uint16_t color): Calculates and draws the
+    filled wedge of the timer circle using M5GFX arc drawing features.
+  - renderSettingsScreen(): Iterates through the SettingRow enum to draw the
+    menu. Handles highlighting the currently selected row and drawing the cursor
+    block when actively editing a value.
+  - drawEditableMinutes(...): A specialized drawing function for the MM duration
+    fields. It draws a block behind the specific digit (tens or ones) the user
+    is currently editing to provide clear visual feedback.
